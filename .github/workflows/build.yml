@@ -32,7 +32,7 @@ jobs:
             asset_name: sage-launcher-macos-x64
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
