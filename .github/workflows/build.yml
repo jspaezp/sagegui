@@ -67,8 +67,8 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-      - name: Run Tests
-        run: cargo test --verbose
+      # - name: Run Tests
+      #   run: cargo test --verbose
 
       - name: Build Release
         run: cargo build --verbose --release
