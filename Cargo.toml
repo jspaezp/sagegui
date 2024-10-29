@@ -10,3 +10,9 @@ egui = "0.29.0"
 rfd = "0.15.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sage-core = { git = "https://github.com/jspaezp/sage.git", rev = "d62801967046b28b14490baf7f9a1842c8264be6" }
+sage-cli = { git = "https://github.com/jspaezp/sage.git", rev = "d62801967046b28b14490baf7f9a1842c8264be6" }
+sage-cloudpath = { git = "https://github.com/jspaezp/sage.git", rev = "d62801967046b28b14490baf7f9a1842c8264be6" }
+timsrust = "0.4.1"
+num_cpus = "1.13"
+
