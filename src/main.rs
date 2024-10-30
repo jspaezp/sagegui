@@ -2,6 +2,7 @@
 /// well ... not really. BUT I learned a lot about Rust and sage and I'm glad I did.
 /// I am more than happy to take PRs and suggestions for improvements!
 use eframe::egui;
+use egui::include_image;
 use rfd::FileDialog;
 use sage_cli::{
     input::{Input, LfqOptions, QuantOptions, TmtOptions, TmtSettings},
@@ -177,8 +178,6 @@ impl From<DatabaseConfig> for Builder {
 
 impl DatabaseConfig {
     fn update_section(&mut self, ui: &mut egui::Ui) {
-        ui.add(egui::Slider::new(&mut self.bucket_size, 8192..=65536).text("Bucket Size"));
-
         // Enzyme Configuration
         ui.group(|ui| {
             self.enzyme.update_section(ui);
@@ -197,9 +196,16 @@ impl DatabaseConfig {
             );
         });
 
-        ui.checkbox(&mut self.generate_decoys, "Generate Decoys");
+        ui.group(|ui| {
+            ui.heading("Ion Kinds");
+            self.ion_kinds.update_section(ui);
+        });
 
-        self.ion_kinds.update_section(ui);
+        ui.group(|ui| {
+            ui.heading("Extras");
+            ui.checkbox(&mut self.generate_decoys, "Generate Decoys");
+            ui.add(egui::Slider::new(&mut self.bucket_size, 8192..=65536).text("Bucket Size"));
+        });
     }
 }
 
@@ -298,17 +304,24 @@ impl QuantType {
     fn update_section(&mut self, ui: &mut egui::Ui) {
         match self {
             QuantType::Lfq(lfq) => {
-                ui.label("PPM Tolerance");
-                ui.add(egui::DragValue::new(&mut lfq.ppm_tolerance).speed(1.0));
-                ui.add(
-                    egui::Slider::new(&mut lfq.spectral_angle, 0.0..=1.0).text("Spectral Angle"),
-                );
-                ui.checkbox(&mut lfq.combine_charge_states, "Combine Charge States");
-                // TODO add selection for the scoring+integration strategy.
+                ui.group(|ui| {
+                    ui.heading("LFQ Settings");
+                    ui.label("PPM Tolerance");
+                    ui.add(egui::DragValue::new(&mut lfq.ppm_tolerance).speed(1.0));
+                    ui.add(
+                        egui::Slider::new(&mut lfq.spectral_angle, 0.0..=1.0)
+                            .text("Spectral Angle"),
+                    );
+                    ui.checkbox(&mut lfq.combine_charge_states, "Combine Charge States");
+                    // TODO add selection for the scoring+integration strategy.
+                });
             }
             QuantType::Tmt(isobar, tmt) => {
-                isobar.update_section(ui);
-                ui.add(egui::Slider::new(&mut tmt.level, 1..=10).text("Level"));
+                ui.group(|ui| {
+                    ui.heading("TMT Settings");
+                    isobar.update_section(ui);
+                    ui.add(egui::Slider::new(&mut tmt.level, 1..=10).text("Level"));
+                });
             }
         }
     }
@@ -448,7 +461,7 @@ impl Default for Config {
             deisotope: false,
             chimera: false,
             wide_window: false,
-            predict_rt: false,
+            predict_rt: true,
             min_peaks: 15,
             max_peaks: 150,
             min_matched_peaks: 6,
@@ -577,10 +590,9 @@ impl SageLauncher {
     }
 
     fn update_quant_options(&mut self, ui: &mut egui::Ui) {
-        let mut quant_enabled = self.config.quant_enabled;
-        ui.checkbox(&mut quant_enabled, "Enable Quantification");
+        ui.checkbox(&mut self.config.quant_enabled, "Enable Quantification");
 
-        if quant_enabled {
+        if self.config.quant_enabled {
             ui.label("Quantification Type");
             ui.radio_value(
                 &mut self.config.quant_class,
@@ -614,6 +626,8 @@ impl eframe::App for SageLauncher {
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Sage Launcher");
+
+                ui.add(egui::Image::new(include_image!("../assets/logo.png")).max_width(400.0));
 
                 // Process Status Section
                 if let Some((_process, _start_time)) = &self.process {
@@ -829,6 +843,9 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Sage Launcher",
         options,
-        Box::new(|_cc| Ok(Box::new(SageLauncher::default()))),
+        Box::new(|_cc| {
+            egui_extras::install_image_loaders(&_cc.egui_ctx);
+            Ok(Box::new(SageLauncher::default()))
+        }),
     )
 }

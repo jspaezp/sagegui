@@ -15,4 +15,5 @@ sage-cli = { git = "https://github.com/jspaezp/sage.git", rev = "d62801967046b28
 sage-cloudpath = { git = "https://github.com/jspaezp/sage.git", rev = "d62801967046b28b14490baf7f9a1842c8264be6" }
 timsrust = "0.4.1"
 num_cpus = "1.13"
-
+egui_extras = { version = "0.29.1", features = ["all_loaders"] }
+image = { version = "0.24", features = ["png"] }
