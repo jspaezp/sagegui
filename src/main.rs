@@ -19,7 +19,9 @@ use sage_core::{lfq::IntegrationStrategy, scoring::ScoreType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::process::Child;
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use timsrust::readers::SpectrumReaderConfig as BrukerSpectrumProcessor;
 
@@ -48,6 +50,12 @@ impl Default for EnzymeConfig {
             semi_enzymatic: false,
         }
     }
+}
+
+#[derive(Debug)]
+enum ThreadMessage {
+    Progress(String),
+    Completed(Result<String, String>),
 }
 
 impl EnzymeConfig {
@@ -399,7 +407,8 @@ struct Config {
     min_matched_peaks: u16,
     max_fragment_charge: u8,
     report_psms: usize,
-    mzml_paths: Vec<String>,
+    mzml_paths: Vec<PathBuf>,
+    dotd_paths: Vec<PathBuf>,
 
     quant: QuantType,
     quant_enabled: bool,
@@ -419,6 +428,20 @@ impl From<Config> for Input {
         } else {
             None
         };
+
+        let mut mzml_path_strings: Vec<String> = val
+            .mzml_paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let dotd_path_strings: Vec<String> = val
+            .dotd_paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        mzml_path_strings.extend(dotd_path_strings);
+
         Input {
             database: val.database.into(),
             precursor_tol: val.precursor_tol.into(),
@@ -437,7 +460,7 @@ impl From<Config> for Input {
             quant,
             predict_rt: Some(val.predict_rt),
             output_directory: Some(val.output_directory),
-            mzml_paths: Some(val.mzml_paths),
+            mzml_paths: Some(mzml_path_strings),
             bruker_spectrum_processor: val.bruker_spectrum_processor,
 
             annotate_matches: Some(val.annotate_matches),
@@ -468,6 +491,7 @@ impl Default for Config {
             max_fragment_charge: 1,
             report_psms: 1,
             mzml_paths: Vec::new(),
+            dotd_paths: Vec::new(),
             quant_enabled: true,
             quant: QuantType::default(),
             bruker_spectrum_processor: None,
@@ -485,9 +509,11 @@ struct SageLauncher {
     status_message: String,
     precursor_tolerance_type: ToleranceType,
     fragment_tolerance_type: ToleranceType,
-    temp_mzml_path: String,
-    process: Option<(Child, Instant)>, // Store both process handle and start time
+    thread_handle: Option<JoinHandle<()>>,
+    message_receiver: Option<Receiver<ThreadMessage>>,
+    start_time: Option<Instant>,
     elapsed_time: String,
+    is_running: bool,
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
@@ -521,8 +547,10 @@ impl Default for SageLauncher {
             status_message: String::new(),
             precursor_tolerance_type: ToleranceType::Ppm,
             fragment_tolerance_type: ToleranceType::Ppm,
-            temp_mzml_path: String::new(),
-            process: None,
+            thread_handle: None,
+            message_receiver: None,
+            start_time: None,
+            is_running: false,
             elapsed_time: String::new(),
         }
     }
@@ -622,28 +650,28 @@ impl SageLauncher {
 impl eframe::App for SageLauncher {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Update process status and elapsed time
-        self.update_process_status();
+        self.check_thread_status();
+
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.heading("Sage Launcher");
 
-                ui.add(egui::Image::new(include_image!("../assets/logo.png")).max_width(400.0));
-
-                // Process Status Section
-                if let Some((_process, _start_time)) = &self.process {
+                // Thread Status Section
+                if self.is_running {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        let status_color = egui::Color32::GREEN;
-                        ui.colored_label(status_color, "●"); // Status dot
-                        ui.label("Process Running");
-                        ui.label(format!("({})", self.elapsed_time));
-
-                        if ui.button("Stop Process").clicked() {
-                            self.stop_process();
+                        ui.spinner(); // Show spinning animation
+                        ui.colored_label(egui::Color32::GREEN, "Processing");
+                        if let Some(start_time) = self.start_time {
+                            self.elapsed_time = format_duration(start_time.elapsed());
+                            ui.label(format!("({})", self.elapsed_time));
                         }
                     });
+
                     ui.add_space(10.0);
                 }
+
+                ui.add(egui::Image::new(include_image!("../assets/logo.png")).max_width(400.0));
                 ui.add_space(20.0);
 
                 // File Selection Section
@@ -675,18 +703,42 @@ impl eframe::App for SageLauncher {
 
                     // mzML file picker
                     ui.horizontal(|ui| {
-                        ui.label("mzML File:");
-                        ui.text_edit_singleline(&mut self.temp_mzml_path);
-                        if ui.button("Browse").clicked() {
-                            if let Some(path) = FileDialog::new()
-                                .add_filter("mzML", &["mzML", "gz", "mzml"])
-                                .pick_file()
+                        ui.label("mzML/.d Files:");
+                        if ui.button("Pick mzmls").clicked() {
+                            if let Some(paths) = FileDialog::new()
+                                .add_filter("mzml", &["mzML", "gz", "mzml"])
+                                .pick_files()
                             {
-                                self.temp_mzml_path = path.display().to_string();
-                                self.config.mzml_paths = vec![self.temp_mzml_path.clone()];
+                                self.config.mzml_paths = paths
+                            } else {
+                                self.config.mzml_paths = Vec::new();
+                            }
+                        }
+                        if ui.button("Pick .d files").clicked() {
+                            if let Some(paths) = FileDialog::new()
+                                .add_filter("Bruker Raw Data", &["d"])
+                                .pick_folders()
+                            {
+                                self.config.dotd_paths = paths
+                            } else {
+                                self.config.dotd_paths = Vec::new();
                             }
                         }
                     });
+
+                    // Show the picked files in a scrollable list
+                    ui.label("Picked Files:");
+                    ui.spacing();
+                    ui.separator();
+                    ui.spacing();
+                    for path in self
+                        .config
+                        .mzml_paths
+                        .iter()
+                        .chain(self.config.dotd_paths.iter())
+                    {
+                        ui.label(path.to_string_lossy());
+                    }
                 });
 
                 // Database Configuration Section
@@ -712,15 +764,15 @@ impl eframe::App for SageLauncher {
 
                 ui.horizontal(|ui| {
                     let launch_button = ui.add_enabled(
-                        self.process.is_none(), // Disable when process is running
+                        !self.is_running, // Disable when process is running
                         egui::Button::new("Launch"),
                     );
 
                     if launch_button.clicked() {
-                        self.status_message = match self.launch_application() {
-                            Ok(_) => "Application launched successfully!".to_string(),
-                            Err(e) => format!("Error: {}", e),
-                        };
+                        match self.launch_application() {
+                            Ok(_) => self.status_message = "Analysis started".to_string(),
+                            Err(e) => self.status_message = format!("Error: {}", e),
+                        }
                     }
                 });
 
@@ -734,54 +786,62 @@ impl eframe::App for SageLauncher {
                         &self.status_message,
                     );
                 }
+
+                ui.add_space(20.0);
+                ui.collapsing("Info", |ui| {
+                    ui.label("Sage GUI Version:");
+                    ui.label(env!("CARGO_PKG_VERSION"));
+                    ui.label("Author: J.Sebastian Paez");
+                    ui.label("License: Apache-2.0");
+                    ui.label("Repository (where you can report errors at): https://github.com/jspaezp/sagegui");
+                    ui.label("Search engine repository: https://github.com/lazear/sage");
+                    ui.label("If you use Sage in a scientific publication, please cite the following paper: 'Sage: An Open-Source Tool for Fast Proteomics Searching and Quantification at Scale' https://doi.org/10.1021/acs.jproteome.3c00486");
+                });
             });
         });
 
         // Request continuous repaint while process is running
-        if self.process.is_some() {
-            ctx.request_repaint();
+        if self.is_running {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 }
 
 impl SageLauncher {
-    fn update_process_status(&mut self) {
-        if let Some((process, start_time)) = &mut self.process {
-            // Check if process is still running
-            match process.try_wait() {
-                Ok(Some(status)) => {
-                    // Process has finished
-                    self.status_message = format!("Process finished with status: {}", status);
-                    self.process = None;
-                    self.elapsed_time.clear();
+    fn check_thread_status(&mut self) {
+        if let Some(receiver) = &self.message_receiver {
+            // Check for messages from the thread
+            match receiver.try_recv() {
+                Ok(ThreadMessage::Progress(msg)) => {
+                    self.status_message = msg;
                 }
-                Ok(None) => {
-                    // Process still running, update elapsed time
-                    let elapsed = start_time.elapsed();
-                    self.elapsed_time = format_duration(elapsed);
+                Ok(ThreadMessage::Completed(result)) => {
+                    match result {
+                        Ok(msg) => self.status_message = msg,
+                        Err(err) => self.status_message = format!("Error: {}", err),
+                    }
+                    self.cleanup_thread();
                 }
-                Err(e) => {
-                    // Error checking process status
-                    self.status_message = format!("Error checking process status: {}", e);
-                    self.process = None;
-                    self.elapsed_time.clear();
+                Err(mpsc::TryRecvError::Empty) => {
+                    // No message available, continue running
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    // Thread has finished or been disconnected
+                    self.cleanup_thread();
                 }
             }
         }
     }
 
-    fn stop_process(&mut self) {
-        if let Some((mut process, _)) = self.process.take() {
-            match process.kill() {
-                Ok(_) => {
-                    self.status_message = "Process stopped".to_string();
-                }
-                Err(e) => {
-                    self.status_message = format!("Error stopping process: {}", e);
-                }
-            }
-            self.elapsed_time.clear();
+    fn cleanup_thread(&mut self) {
+        if let Some(handle) = self.thread_handle.take() {
+            // Wait for the thread to finish
+            let _ = handle.join();
         }
+        self.thread_handle = None;
+        self.message_receiver = None;
+        self.start_time = None;
+        self.is_running = false;
     }
 
     fn launch_application(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -806,16 +866,43 @@ impl SageLauncher {
         let parallel = num_cpus::get() as u16 / 2;
         println!("Parallel: {}", parallel);
         let parquet = false;
-
-        // TODO: I could build the input and on update and provide real time feedback.
         let sage_input: Input = self.config.clone().into();
-        let runner = sage_input.build().and_then(Runner::new)?;
-        let _tel = runner.run(parallel.into(), parquet)?;
 
-        println!("Done Running");
+        // Create channel for thread communication
+        let (sender, receiver) = mpsc::channel();
+        self.message_receiver = Some(receiver);
+
+        // Spawn the analysis thread
+        let thread_handle = thread::spawn(move || {
+            // Send initial progress
+            let _ = sender.send(ThreadMessage::Progress("Starting analysis...".to_string()));
+
+            // TODO: I could build the input and on update and provide real time feedback.
+
+            // Run the analysis
+            let result = match run_sage(sage_input, parallel, parquet) {
+                Ok(_) => Ok("Analysis completed successfully".to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+
+            // Send completion message
+            let _ = sender.send(ThreadMessage::Completed(result));
+        });
+
+        self.thread_handle = Some(thread_handle);
+        self.start_time = Some(Instant::now());
+        self.is_running = true;
 
         Ok(())
     }
+}
+
+fn run_sage(input: Input, parallel: u16, parquet: bool) -> Result<(), Box<dyn std::error::Error>> {
+    println!("Running analysis... Building");
+    let runner = input.build().and_then(Runner::new)?;
+    println!("Running analysis... Executing");
+    let _tel = runner.run(parallel.into(), parquet)?;
+    Ok(())
 }
 
 // Helper function to format duration
@@ -835,6 +922,9 @@ fn format_duration(duration: Duration) -> String {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    // Setup env logger
+    env_logger::init();
+
     let options = eframe::NativeOptions {
         // initial_window_size: Some(egui::vec2(600.0, 800.0)),
         ..Default::default()
