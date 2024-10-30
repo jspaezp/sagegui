@@ -8,6 +8,7 @@ use sage_cli::{
     input::{Input, LfqOptions, QuantOptions, TmtOptions, TmtSettings},
     runner::Runner,
 };
+use sage_core::modification::ModificationSpecificity;
 use sage_core::{
     database::{Builder, EnzymeBuilder},
     lfq::LfqSettings,
@@ -18,8 +19,8 @@ use sage_core::{ion_series::Kind, lfq::PeakScoringStrategy};
 use sage_core::{lfq::IntegrationStrategy, scoring::ScoreType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -149,7 +150,7 @@ impl IonKindSelection {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct DatabaseConfig {
     bucket_size: usize,
     enzyme: EnzymeConfig,
@@ -160,8 +161,8 @@ struct DatabaseConfig {
     max_variable_mods: u32,
     decoy_tag: Option<String>,
     generate_decoys: bool,
-    static_mods: Option<HashMap<String, f32>>,
-    variable_mods: Option<HashMap<String, Vec<f32>>>,
+    static_mods: StaticModConfig,
+    variable_mods: VariableModConfig,
     fasta: String,
 }
 
@@ -178,8 +179,146 @@ impl From<DatabaseConfig> for Builder {
             decoy_tag: val.decoy_tag,
             generate_decoys: Some(val.generate_decoys),
             fasta: Some(val.fasta),
-            static_mods: val.static_mods,
-            variable_mods: val.variable_mods,
+            static_mods: Some(val.static_mods.as_hashmap()),
+            variable_mods: Some(val.variable_mods.as_hashmap()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StaticModConfig {
+    static_mods: HashMap<ModificationSpecificity, f32>,
+    new_mod_buffer: String,
+    new_mass_buffer: f32,
+}
+
+impl Default for StaticModConfig {
+    fn default() -> Self {
+        Self {
+            static_mods: HashMap::from([(ModificationSpecificity::Residue(b'C'), 57.021464f32)]),
+            new_mod_buffer: "W".to_string(),
+            new_mass_buffer: f32::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VariableModConfig {
+    // variable_mods: HashMap<ModificationSpecificity, Vec<f32>>,
+    // Adding multiple variable mods later ...
+    variable_mods: StaticModConfig,
+}
+
+impl Default for VariableModConfig {
+    fn default() -> Self {
+        let hm = HashMap::from([(ModificationSpecificity::Residue(b'M'), 15.994915f32)]);
+        let def = StaticModConfig {
+            static_mods: hm,
+            new_mod_buffer: "M".to_string(),
+            new_mass_buffer: 15.994915f32,
+        };
+
+        Self { variable_mods: def }
+    }
+}
+
+impl VariableModConfig {
+    fn update_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Variable Modifications");
+        self.variable_mods._update_section(ui);
+    }
+
+    fn as_hashmap(&self) -> HashMap<String, Vec<f32>> {
+        let mut hm = HashMap::new();
+        for (mod_, mass) in self.variable_mods.static_mods.iter() {
+            hm.insert(mod_.to_string(), vec![*mass]);
+        }
+        hm
+    }
+}
+
+impl StaticModConfig {
+    fn update_section(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Static Modifications");
+        self._update_section(ui);
+    }
+    fn _update_section(&mut self, ui: &mut egui::Ui) {
+        ui.label("Modifications are applied to all peptides.");
+
+        // 2 parter ...
+        // 1. Input boxes + button to add new mods
+        // 2. List of the set mods + button to remove mods
+
+        let ip = ui.horizontal(|ui| {
+            ui.label("Add Modification:");
+            ui.text_edit_singleline(&mut self.new_mod_buffer);
+            ui.add(egui::DragValue::new(&mut self.new_mass_buffer).speed(0.01));
+
+            ModificationSpecificity::from_str(&self.new_mod_buffer)
+        });
+
+        let parsed_mod = ip.inner;
+
+        // Only allow adding valid #[cfg(test)]
+        if let Ok(mod_) = parsed_mod {
+            if ui.button("Add").clicked() {
+                self.static_mods.insert(mod_, self.new_mass_buffer);
+            }
+        } else {
+            ui.label("Invalid Modification ('C', ']', '$' and '^M' are all valid examples)");
+        }
+
+        let remove_queue = self.update_deletion_queue(ui);
+        for mod_ in remove_queue {
+            self.static_mods.remove(&mod_);
+        }
+    }
+
+    fn update_deletion_queue(&self, ui: &mut egui::Ui) -> Vec<ModificationSpecificity> {
+        let mut to_remove = Vec::new();
+        // In a container
+        ui.group(|ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::new(10.0, 10.0);
+            ui.label("Current Modifications:");
+            for (mod_, mass) in self.static_mods.iter() {
+                ui.horizontal(|ui| {
+                    ui.label(mod_.to_string());
+                    ui.label(format!("{:.4}", mass));
+
+                    if ui.button("Remove").clicked() {
+                        to_remove.push(*mod_);
+                    }
+                });
+            }
+        });
+
+        to_remove
+    }
+
+    fn as_hashmap(&self) -> HashMap<String, f32> {
+        let mut hm = HashMap::new();
+        for (mod_, mass) in self.static_mods.iter() {
+            hm.insert(mod_.to_string(), *mass);
+        }
+        hm
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            bucket_size: 32768,
+            enzyme: EnzymeConfig::default(),
+            peptide_min_mass: 500.0,
+            peptide_max_mass: 5000.0,
+            ion_kinds: IonKindSelection::default(),
+            min_ion_index: 2,
+            max_variable_mods: 2,
+            decoy_tag: Some("rev_".to_string()),
+            generate_decoys: true,
+            fasta: String::new(),
+            static_mods: StaticModConfig::default(),
+            variable_mods: VariableModConfig::default(),
         }
     }
 }
@@ -214,25 +353,9 @@ impl DatabaseConfig {
             ui.checkbox(&mut self.generate_decoys, "Generate Decoys");
             ui.add(egui::Slider::new(&mut self.bucket_size, 8192..=65536).text("Bucket Size"));
         });
-    }
-}
 
-impl Default for DatabaseConfig {
-    fn default() -> Self {
-        Self {
-            bucket_size: 32768,
-            enzyme: EnzymeConfig::default(),
-            peptide_min_mass: 500.0,
-            peptide_max_mass: 5000.0,
-            ion_kinds: IonKindSelection::default(),
-            min_ion_index: 2,
-            max_variable_mods: 2,
-            decoy_tag: Some("rev_".to_string()),
-            generate_decoys: true,
-            fasta: String::new(),
-            static_mods: Some(HashMap::from([("C".to_string(), 22.22f32)])),
-            variable_mods: Some(HashMap::from([("M".to_string(), vec![18.99f32])])),
-        }
+        self.static_mods.update_section(ui);
+        self.variable_mods.update_section(ui);
     }
 }
 
@@ -390,7 +513,7 @@ impl Default for QuantType {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct Config {
     database: DatabaseConfig,
     precursor_tol: ToleranceConfig,
@@ -851,17 +974,6 @@ impl SageLauncher {
         if self.config.mzml_paths.is_empty() {
             return Err("mzML file is not selected".into());
         }
-
-        // Create config JSON
-        let config_json = serde_json::to_string_pretty(&self.config)?;
-
-        // Save config to temporary file
-        let config_path = std::env::temp_dir().join("sage_config.json");
-        fs::write(&config_path, config_json.clone())?;
-
-        // Print the configuration (for debugging)
-        println!("Generated configuration:");
-        println!("{}", config_json);
 
         let parallel = num_cpus::get() as u16 / 2;
         println!("Parallel: {}", parallel);
