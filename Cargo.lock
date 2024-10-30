@@ -4385,7 +4385,7 @@ dependencies = [
 
 [[package]]
 name = "sagegui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4399,7 +4399,6 @@ dependencies = [
  "sage-core",
  "serde",
  "serde_json",
- "str",
  "timsrust",
 ]
 
@@ -4718,12 +4717,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "str"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "909030ddfa69dd2be896c6139603db8bc85ab97119b2e60b8307cb192eb89d3d"
 
 [[package]]
 name = "strict-num"

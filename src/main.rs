@@ -67,7 +67,8 @@ impl EnzymeConfig {
         ui.add(egui::Slider::new(&mut self.max_len, 6..=100).text("Max Length"));
         ui.horizontal(|ui| {
             ui.label("Cleave At:");
-            ui.text_edit_singleline(&mut self.cleave_at);
+            ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(10.0));
+            // ui.text_edit_singleline(&mut self.cleave_at);
         });
         ui.horizontal(|ui| {
             ui.label("Restrict:");
@@ -75,7 +76,8 @@ impl EnzymeConfig {
             ui.checkbox(&mut self.enable_restrict, "Enable Restrict");
             if self.enable_restrict {
                 ui.label("Restrict Char:");
-                ui.text_edit_singleline(&mut self.restrict_char);
+                ui.add(egui::TextEdit::singleline(&mut self.restrict_char).desired_width(10.0));
+                // ui.text_edit_singleline(&mut self.restrict_char);
                 // Show warning if more than 1 character is written
                 if self.restrict_char.len() > 1 {
                     ui.label("Warning: Only one character is allowed! Skipping restriction.");
@@ -251,8 +253,10 @@ impl StaticModConfig {
 
         let ip = ui.horizontal(|ui| {
             ui.label("Add Modification:");
-            ui.text_edit_singleline(&mut self.new_mod_buffer);
             ui.add(egui::DragValue::new(&mut self.new_mass_buffer).speed(0.01));
+
+            ui.add(egui::TextEdit::singleline(&mut self.new_mod_buffer).desired_width(10.0));
+            // ui.text_edit_singleline(&mut self.new_mod_buffer);
 
             ModificationSpecificity::from_str(&self.new_mod_buffer)
         });
@@ -267,6 +271,7 @@ impl StaticModConfig {
         } else {
             ui.label("Invalid Modification ('C', ']', '$' and '^M' are all valid examples)");
         }
+        ui.add_space(10.0);
 
         let remove_queue = self.update_deletion_queue(ui);
         for mod_ in remove_queue {
@@ -330,6 +335,12 @@ impl DatabaseConfig {
             self.enzyme.update_section(ui);
         });
 
+        ui.group(|ui| {
+            ui.heading("Modifications");
+            self.static_mods.update_section(ui);
+            self.variable_mods.update_section(ui);
+        });
+
         // Mass Ranges
         ui.group(|ui| {
             ui.heading("Mass Ranges");
@@ -353,9 +364,6 @@ impl DatabaseConfig {
             ui.checkbox(&mut self.generate_decoys, "Generate Decoys");
             ui.add(egui::Slider::new(&mut self.bucket_size, 8192..=65536).text("Bucket Size"));
         });
-
-        self.static_mods.update_section(ui);
-        self.variable_mods.update_section(ui);
     }
 }
 
@@ -911,15 +919,17 @@ impl eframe::App for SageLauncher {
                 }
 
                 ui.add_space(20.0);
-                ui.collapsing("Info", |ui| {
+                ui.collapsing("Info/Help", |ui| {
                     ui.label("Sage GUI Version:");
                     ui.label(env!("CARGO_PKG_VERSION"));
                     ui.label("Author: J.Sebastian Paez");
-                    ui.label("License: Apache-2.0");
                     ui.label("Repository (where you can report errors at): https://github.com/jspaezp/sagegui");
+                    ui.label("License: Apache-2.0");
+                    ui.add_space(20.0);
                     ui.label("Search engine repository: https://github.com/lazear/sage");
                     ui.label("If you use Sage in a scientific publication, please cite the following paper: 'Sage: An Open-Source Tool for Fast Proteomics Searching and Quantification at Scale' https://doi.org/10.1021/acs.jproteome.3c00486");
                 });
+                ui.add_space(50.0);
             });
         });
 
