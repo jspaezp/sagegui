@@ -981,7 +981,7 @@ impl SageLauncher {
         if self.config.database.fasta.is_empty() {
             return Err("FASTA file is not selected".into());
         }
-        if self.config.mzml_paths.is_empty() {
+        if self.config.mzml_paths.is_empty() && self.config.dotd_paths.is_empty() {
             return Err("mzML file is not selected".into());
         }
 
