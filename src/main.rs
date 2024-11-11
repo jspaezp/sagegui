@@ -68,16 +68,13 @@ impl EnzymeConfig {
         ui.horizontal(|ui| {
             ui.label("Cleave At:");
             ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(10.0));
-            // ui.text_edit_singleline(&mut self.cleave_at);
         });
         ui.horizontal(|ui| {
             ui.label("Restrict:");
-            // ui.text_edit_singleline(&mut self.restrict);
             ui.checkbox(&mut self.enable_restrict, "Enable Restrict");
             if self.enable_restrict {
                 ui.label("Restrict Char:");
                 ui.add(egui::TextEdit::singleline(&mut self.restrict_char).desired_width(10.0));
-                // ui.text_edit_singleline(&mut self.restrict_char);
                 // Show warning if more than 1 character is written
                 if self.restrict_char.len() > 1 {
                     ui.label("Warning: Only one character is allowed! Skipping restriction.");
@@ -85,6 +82,7 @@ impl EnzymeConfig {
             }
         });
         ui.checkbox(&mut self.c_terminal, "C-Terminal");
+        ui.checkbox(&mut self.semi_enzymatic, "Semi-Enzymatic");
     }
 }
 
