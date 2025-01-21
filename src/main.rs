@@ -67,7 +67,7 @@ impl EnzymeConfig {
         ui.add(egui::Slider::new(&mut self.max_len, 6..=100).text("Max Length"));
         ui.horizontal(|ui| {
             ui.label("Cleave At:");
-            ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(10.0));
+            ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(20.0));
         });
         ui.horizontal(|ui| {
             ui.label("Restrict:");
@@ -443,8 +443,10 @@ impl QuantType {
             QuantType::Lfq(lfq) => {
                 ui.group(|ui| {
                     ui.heading("LFQ Settings");
-                    ui.label("PPM Tolerance");
+                    ui.label("M/Z PPM Tolerance");
                     ui.add(egui::DragValue::new(&mut lfq.ppm_tolerance).speed(1.0));
+                    ui.label("Mobility Percent Tolerance");
+                    ui.add(egui::DragValue::new(&mut lfq.mobility_pct_tolerance).speed(0.1));
                     ui.add(
                         egui::Slider::new(&mut lfq.spectral_angle, 0.0..=1.0)
                             .text("Spectral Angle"),
@@ -488,6 +490,7 @@ impl From<QuantType> for QuantOptions {
                     spectral_angle: Some(lfq.spectral_angle),
                     ppm_tolerance: Some(lfq.ppm_tolerance),
                     combine_charge_states: Some(lfq.combine_charge_states),
+                    mobility_pct_tolerance: Some(lfq.mobility_pct_tolerance),
                 };
                 QuantOptions {
                     tmt: None,
