@@ -4,13 +4,12 @@
 use eframe::egui;
 use egui::include_image;
 use rfd::FileDialog;
+use sage_cli::input::Input as SageCliInput;
 use sage_cli::{
-    input::{LfqOptions, QuantOptions, TmtOptions, TmtSettings, },
+    input::{LfqOptions, QuantOptions, TmtOptions, TmtSettings},
     runner::Runner,
 };
-use sage_cli::input::Input as SageCliInput;
-use sage_cloudpath::tdf::{BrukerProcessingConfig, BrukerMS1CentoidingConfig};
-use timsrust::readers::SpectrumReaderConfig;
+use sage_cloudpath::tdf::{BrukerMS1CentoidingConfig, BrukerProcessingConfig};
 use sage_core::modification::ModificationSpecificity;
 use sage_core::{
     database::{Builder, EnzymeBuilder},
@@ -27,6 +26,7 @@ use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use timsrust::readers::SpectrumReaderConfig;
 
 use mimalloc::MiMalloc;
 
@@ -1040,9 +1040,15 @@ impl SageLauncher {
     }
 }
 
-fn run_sage(input: SageCliInput, parallel: u16, parquet: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_sage(
+    input: SageCliInput,
+    parallel: u16,
+    parquet: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running analysis... Building");
-    let runner = input.build().and_then(|x|Runner::new(x, parallel as usize))?;
+    let runner = input
+        .build()
+        .and_then(|x| Runner::new(x, parallel as usize))?;
     println!("Running analysis... Executing");
     let _tel = runner.run(parallel.into(), parquet)?;
     Ok(())
