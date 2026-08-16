@@ -418,8 +418,8 @@ impl IsobarSelection {
         ui.radio_value(&mut self.selected, Isobaric::Tmt6, "TMT 6-plex");
         ui.radio_value(&mut self.selected, Isobaric::Tmt10, "TMT 10-plex");
         ui.radio_value(&mut self.selected, Isobaric::Tmt11, "TMT 11-plex");
-        ui.radio_value(&mut self.selected, Isobaric::Tmt11, "TMT 16-plex");
-        ui.radio_value(&mut self.selected, Isobaric::Tmt11, "TMT 18-plex");
+        ui.radio_value(&mut self.selected, Isobaric::Tmt16, "TMT 16-plex");
+        ui.radio_value(&mut self.selected, Isobaric::Tmt18, "TMT 18-plex");
     }
 }
 
