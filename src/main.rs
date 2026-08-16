@@ -717,10 +717,10 @@ impl SageLauncher {
 
             match (self.fragment_tolerance_type, self.config.fragment_tol) {
                 (ToleranceType::Ppm, ToleranceConfig::Da(..)) => {
-                    self.config.precursor_tol = self.fragment_tolerance_type.get_default_tolerance()
+                    self.config.fragment_tol = self.fragment_tolerance_type.get_default_tolerance()
                 }
                 (ToleranceType::Da, ToleranceConfig::Ppm(..)) => {
-                    self.config.precursor_tol = self.fragment_tolerance_type.get_default_tolerance()
+                    self.config.fragment_tol = self.fragment_tolerance_type.get_default_tolerance()
                 }
                 _ => {}
             }
