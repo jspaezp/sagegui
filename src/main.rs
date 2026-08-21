@@ -4,10 +4,12 @@
 use eframe::egui;
 use egui::include_image;
 use rfd::FileDialog;
+use sage_cli::input::Input as SageCliInput;
 use sage_cli::{
-    input::{Input, LfqOptions, QuantOptions, TmtOptions, TmtSettings},
+    input::{LfqOptions, QuantOptions, TmtOptions, TmtSettings},
     runner::Runner,
 };
+use sage_cloudpath::tdf::{BrukerMS1CentoidingConfig, BrukerProcessingConfig};
 use sage_core::modification::ModificationSpecificity;
 use sage_core::{
     database::{Builder, EnzymeBuilder},
@@ -24,7 +26,14 @@ use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use timsrust::readers::SpectrumReaderConfig as BrukerSpectrumProcessor;
+use timsrust::readers::SpectrumReaderConfig;
+
+use mimalloc::MiMalloc;
+
+// Experimental for now ... It is reported to solve the issue of
+// poor performance in windows.
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct EnzymeConfig {
@@ -67,7 +76,7 @@ impl EnzymeConfig {
         ui.add(egui::Slider::new(&mut self.max_len, 6..=100).text("Max Length"));
         ui.horizontal(|ui| {
             ui.label("Cleave At:");
-            ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(10.0));
+            ui.add(egui::TextEdit::singleline(&mut self.cleave_at).desired_width(20.0));
         });
         ui.horizontal(|ui| {
             ui.label("Restrict:");
@@ -181,6 +190,9 @@ impl From<DatabaseConfig> for Builder {
             fasta: Some(val.fasta),
             static_mods: Some(val.static_mods.as_hashmap()),
             variable_mods: Some(val.variable_mods.as_hashmap()),
+            prefilter: None,
+            prefilter_chunk_size: None,
+            prefilter_low_memory: None,
         }
     }
 }
@@ -443,8 +455,10 @@ impl QuantType {
             QuantType::Lfq(lfq) => {
                 ui.group(|ui| {
                     ui.heading("LFQ Settings");
-                    ui.label("PPM Tolerance");
+                    ui.label("M/Z PPM Tolerance");
                     ui.add(egui::DragValue::new(&mut lfq.ppm_tolerance).speed(1.0));
+                    ui.label("Mobility Percent Tolerance");
+                    ui.add(egui::DragValue::new(&mut lfq.mobility_pct_tolerance).speed(0.1));
                     ui.add(
                         egui::Slider::new(&mut lfq.spectral_angle, 0.0..=1.0)
                             .text("Spectral Angle"),
@@ -488,6 +502,7 @@ impl From<QuantType> for QuantOptions {
                     spectral_angle: Some(lfq.spectral_angle),
                     ppm_tolerance: Some(lfq.ppm_tolerance),
                     combine_charge_states: Some(lfq.combine_charge_states),
+                    mobility_pct_tolerance: Some(lfq.mobility_pct_tolerance),
                 };
                 QuantOptions {
                     tmt: None,
@@ -543,14 +558,14 @@ struct Config {
     quant_enabled: bool,
     quant_class: SupportedQuantTypes,
 
-    bruker_spectrum_processor: Option<BrukerSpectrumProcessor>,
+    bruker_spectrum_processor: Option<BrukerProcessingConfig>,
     annotate_matches: bool,
     write_pin: bool,
     score_type: ScoreType,
     output_directory: String,
 }
 
-impl From<Config> for Input {
+impl From<Config> for SageCliInput {
     fn from(val: Config) -> Self {
         let quant = if val.quant_enabled {
             Some(val.quant.into())
@@ -571,7 +586,7 @@ impl From<Config> for Input {
 
         mzml_path_strings.extend(dotd_path_strings);
 
-        Input {
+        SageCliInput {
             database: val.database.into(),
             precursor_tol: val.precursor_tol.into(),
             fragment_tol: val.fragment_tol.into(),
@@ -590,7 +605,7 @@ impl From<Config> for Input {
             predict_rt: Some(val.predict_rt),
             output_directory: Some(val.output_directory),
             mzml_paths: Some(mzml_path_strings),
-            bruker_spectrum_processor: val.bruker_spectrum_processor,
+            bruker_config: val.bruker_spectrum_processor,
 
             annotate_matches: Some(val.annotate_matches),
             write_pin: Some(val.write_pin),
@@ -604,6 +619,14 @@ impl Default for Config {
         let cwd_str: Option<String> = std::env::current_dir()
             .ok()
             .map(|p| p.to_string_lossy().to_string());
+
+        let bruker_config = BrukerProcessingConfig {
+            ms1: BrukerMS1CentoidingConfig {
+                mz_ppm: 3.,
+                ims_pct: 2.,
+            },
+            ms2: SpectrumReaderConfig::default(),
+        };
         Self {
             database: DatabaseConfig::default(),
             precursor_tol: ToleranceConfig::default(),
@@ -616,17 +639,17 @@ impl Default for Config {
             predict_rt: true,
             min_peaks: 15,
             max_peaks: 150,
-            min_matched_peaks: 6,
+            min_matched_peaks: 4,
             max_fragment_charge: 1,
             report_psms: 1,
             mzml_paths: Vec::new(),
             dotd_paths: Vec::new(),
             quant_enabled: true,
             quant: QuantType::default(),
-            bruker_spectrum_processor: None,
+            bruker_spectrum_processor: Some(bruker_config),
             quant_class: SupportedQuantTypes::Lfq,
-            annotate_matches: false,
-            write_pin: false,
+            annotate_matches: true,
+            write_pin: true,
             score_type: ScoreType::SageHyperScore,
             output_directory: cwd_str.unwrap_or_else(|| "output".to_string()),
         }
@@ -986,7 +1009,7 @@ impl SageLauncher {
         let parallel = num_cpus::get() as u16 / 2;
         println!("Parallel: {}", parallel);
         let parquet = false;
-        let sage_input: Input = self.config.clone().into();
+        let sage_input: SageCliInput = self.config.clone().into();
 
         // Create channel for thread communication
         let (sender, receiver) = mpsc::channel();
@@ -1017,9 +1040,15 @@ impl SageLauncher {
     }
 }
 
-fn run_sage(input: Input, parallel: u16, parquet: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_sage(
+    input: SageCliInput,
+    parallel: u16,
+    parquet: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running analysis... Building");
-    let runner = input.build().and_then(Runner::new)?;
+    let runner = input
+        .build()
+        .and_then(|x| Runner::new(x, parallel as usize))?;
     println!("Running analysis... Executing");
     let _tel = runner.run(parallel.into(), parquet)?;
     Ok(())
