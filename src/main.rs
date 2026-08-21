@@ -8,6 +8,7 @@ use sage_cli::{
     input::{Input, LfqOptions, QuantOptions, TmtOptions, TmtSettings},
     runner::Runner,
 };
+use sage_cloudpath::tdf::BrukerProcessingConfig;
 use sage_core::modification::ModificationSpecificity;
 use sage_core::{
     database::{Builder, EnzymeBuilder},
@@ -24,7 +25,6 @@ use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use timsrust::readers::SpectrumReaderConfig as BrukerSpectrumProcessor;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct EnzymeConfig {
@@ -89,7 +89,7 @@ impl EnzymeConfig {
 impl From<EnzymeConfig> for EnzymeBuilder {
     fn from(val: EnzymeConfig) -> Self {
         let restrict = if val.enable_restrict && val.restrict_char.len() == 1 {
-            Some(val.restrict_char.chars().next().unwrap())
+            Some(val.restrict_char.clone())
         } else {
             None
         };
@@ -181,6 +181,12 @@ impl From<DatabaseConfig> for Builder {
             fasta: Some(val.fasta),
             static_mods: Some(val.static_mods.as_hashmap()),
             variable_mods: Some(val.variable_mods.as_hashmap()),
+
+            // New in sage 0.15.0-beta.2; None defers to sage defaults
+            // (prefilter: false, chunk_size: 0 = auto, low_memory: true)
+            prefilter: None,
+            prefilter_chunk_size: None,
+            prefilter_low_memory: None,
         }
     }
 }
@@ -488,6 +494,10 @@ impl From<QuantType> for QuantOptions {
                     spectral_angle: Some(lfq.spectral_angle),
                     ppm_tolerance: Some(lfq.ppm_tolerance),
                     combine_charge_states: Some(lfq.combine_charge_states),
+
+                    // New in sage 0.15.0-beta.2; None defers to LfqSettings::default()
+                    mobility_pct_tolerance: None,
+                    peptide_q_value: None,
                 };
                 QuantOptions {
                     tmt: None,
@@ -543,7 +553,7 @@ struct Config {
     quant_enabled: bool,
     quant_class: SupportedQuantTypes,
 
-    bruker_spectrum_processor: Option<BrukerSpectrumProcessor>,
+    bruker_config: Option<BrukerProcessingConfig>,
     annotate_matches: bool,
     write_pin: bool,
     score_type: ScoreType,
@@ -590,11 +600,17 @@ impl From<Config> for Input {
             predict_rt: Some(val.predict_rt),
             output_directory: Some(val.output_directory),
             mzml_paths: Some(mzml_path_strings),
-            bruker_spectrum_processor: val.bruker_spectrum_processor,
+            bruker_config: val.bruker_config,
 
             annotate_matches: Some(val.annotate_matches),
             write_pin: Some(val.write_pin),
             score_type: Some(val.score_type),
+
+            // New in sage 0.15.0-beta.2; None defers to sage defaults
+            // (protein_grouping: true, peptide_fdr: 0.01, write_report: false)
+            protein_grouping: None,
+            protein_grouping_peptide_fdr: None,
+            write_report: None,
         }
     }
 }
@@ -623,7 +639,7 @@ impl Default for Config {
             dotd_paths: Vec::new(),
             quant_enabled: true,
             quant: QuantType::default(),
-            bruker_spectrum_processor: None,
+            bruker_config: None,
             quant_class: SupportedQuantTypes::Lfq,
             annotate_matches: false,
             write_pin: false,
@@ -1019,7 +1035,9 @@ impl SageLauncher {
 
 fn run_sage(input: Input, parallel: u16, parquet: bool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Running analysis... Building");
-    let runner = input.build().and_then(Runner::new)?;
+    let runner = input
+        .build()
+        .and_then(|p| Runner::new(p, parallel.into()))?;
     println!("Running analysis... Executing");
     let _tel = runner.run(parallel.into(), parquet)?;
     Ok(())
